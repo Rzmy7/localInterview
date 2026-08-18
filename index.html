@@ -4,317 +4,54 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Interview Voice Recorder</title>
-  <style>
-    :root {
-      --bg: #f4f6f8;
-      --card: #ffffff;
-      --primary: #2563eb;
-      --danger: #dc2626;
-      --text: #1e293b;
-      --text-muted: #64748b;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background-color: var(--bg);
-      color: var(--text);
-      margin: 0;
-      padding: 16px;
-      max-width: 600px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    h1, h2 { margin-top: 0; }
-    .card {
-      background: var(--card);
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 20px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    }
-    label {
-      display: block;
-      font-size: 0.85rem;
-      font-weight: 600;
-      color: var(--text-muted);
-      margin-top: 10px;
-      margin-bottom: 4px;
-    }
-    input, textarea {
-      width: 100%;
-      padding: 10px;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      box-sizing: border-box;
-      font-size: 1rem;
-    }
-    textarea { resize: vertical; height: 70px; }
-    .controls {
-      display: flex;
-      gap: 10px;
-      margin-top: 16px;
-      align-items: center;
-    }
-    button {
-      flex: 1;
-      padding: 12px;
-      border: none;
-      border-radius: 8px;
-      font-size: 1rem;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .btn-record { background-color: var(--danger); color: white; }
-    .btn-stop { background-color: #475569; color: white; }
-    .btn-danger { background-color: #fee2e2; color: var(--danger); flex: 0; }
-    .timer {
-      font-size: 1.2rem;
-      font-weight: bold;
-      color: var(--danger);
-      text-align: center;
-      margin-top: 10px;
-    }
-    .status {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      text-align: center;
-      margin-top: 4px;
-    }
-    .interview-item {
-      border-bottom: 1px solid #e2e8f0;
-      padding-bottom: 16px;
-      margin-bottom: 16px;
-    }
-    .interview-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
-    .meta { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px; }
-    audio { width: 100%; margin-top: 8px; }
-  </style>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="script.js" defer></script>
 </head>
 <body>
 
-  <h1>🎙️ Interview Recorder</h1>
+  <main class="app-container">
+    <h1>🎙️ Interview Recorder</h1>
 
-  <!-- NEW INTERVIEW FORM -->
-  <div class="card">
-    <h2>New Session</h2>
-    <label for="candidate">Candidate Name</label>
-    <input type="text" id="candidate" placeholder="e.g. Jane Doe" />
+    <!-- NEW INTERVIEW FORM -->
+    <section class="card">
+      <h2>New Session</h2>
+      <label for="candidate">Candidate Name *</label>
+      <input type="text" id="candidate" placeholder="e.g. Jane Doe" required />
 
-    <label for="interviewer">Interviewer Name</label>
-    <input type="text" id="interviewer" placeholder="e.g. John Smith" />
+      <label for="interviewer">Interviewer Name</label>
+      <input type="text" id="interviewer" placeholder="e.g. John Smith" />
 
-    <label for="notes">Notes / Observations</label>
-    <textarea id="notes" placeholder="Key takeaways during interview..."></textarea>
+      <label for="notes">Notes / Observations</label>
+      <textarea id="notes" placeholder="Key takeaways during interview..."></textarea>
 
-    <div class="timer" id="timerDisplay">00:00</div>
-    <div class="status" id="wakeLockStatus">Screen Lock: Inactive</div>
+      <div class="timer" id="timerDisplay">00:00</div>
+      <div class="status" id="wakeLockStatus">Screen Lock: Inactive</div>
 
-    <div class="controls">
-      <button id="recordBtn" class="btn-record">Start Recording</button>
-      <button id="stopBtn" class="btn-stop" disabled>Stop & Save</button>
-    </div>
-  </div>
+      <div class="controls">
+        <button id="recordBtn" class="btn btn-record">Start Recording</button>
+        <button id="stopBtn" class="btn btn-stop" disabled>Stop & Save</button>
+      </div>
+    </section>
 
-  <!-- SAVED INTERVIEWS LIST -->
-  <div class="card">
-    <h2>Past Interviews</h2>
-    <div id="interviewsList">Loading saved interviews...</div>
-  </div>
-
-  <script>
-    // --- INDEXEDDB SETUP ---
-    let db;
-    const dbRequest = indexedDB.open("InterviewDB", 1);
-
-    dbRequest.onupgradeneeded = (e) => {
-      db = e.target.result;
-      if (!db.objectStoreNames.contains("interviews")) {
-        db.createObjectStore("interviews", { keyPath: "id", autoIncrement: true });
-      }
-    };
-
-    dbRequest.onsuccess = (e) => {
-      db = e.target.result;
-      requestPersistentStorage();
-      loadInterviews();
-    };
-
-    async function requestPersistentStorage() {
-      if (navigator.storage && navigator.storage.persist) {
-        await navigator.storage.persist();
-      }
-    }
-
-    // --- AUDIO & WAKE LOCK STATE ---
-    let mediaRecorder;
-    let audioChunks = [];
-    let wakeLock = null;
-    let timerInterval;
-    let secondsElapsed = 0;
-
-    const recordBtn = document.getElementById("recordBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const timerDisplay = document.getElementById("timerDisplay");
-    const wakeLockStatus = document.getElementById("wakeLockStatus");
-
-    // --- RECORDING LOGIC ---
-    recordBtn.addEventListener("click", async () => {
-      const candidate = document.getElementById("candidate").value.trim();
-      if (!candidate) {
-        alert("Please enter a Candidate Name first.");
-        return;
-      }
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    <!-- DATA BACKUP & TRANSFER -->
+    <section class="card">
+      <h2>Data Backup & Transfer</h2>
+      <div class="controls">
+        <button id="exportBtn" class="btn btn-export">Export All Data</button>
         
-        // Choose best supported format for Android
-        const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") 
-          ? "audio/webm;codecs=opus" 
-          : "audio/webm";
+        <label class="btn btn-import">
+          Import Data
+          <input type="file" id="importInput" accept=".json" style="display: none;" />
+        </label>
+      </div>
+    </section>
 
-        mediaRecorder = new MediaRecorder(stream, { mimeType });
-        audioChunks = [];
+    <!-- SAVED INTERVIEWS LIST -->
+    <section class="card">
+      <h2>Past Interviews</h2>
+      <div id="interviewsList">Loading saved interviews...</div>
+    </section>
+  </main>
 
-        mediaRecorder.ondataavailable = (e) => {
-          if (e.data.size > 0) audioChunks.push(e.data);
-        };
-
-        mediaRecorder.onstop = async () => {
-          const audioBlob = new Blob(audioChunks, { type: mimeType });
-          await saveInterview(audioBlob);
-          stream.getTracks().forEach(track => track.stop()); // Release mic
-          releaseWakeLock();
-          resetTimer();
-        };
-
-        mediaRecorder.start();
-        await requestWakeLock();
-
-        // Update UI
-        recordBtn.disabled = true;
-        stopBtn.disabled = false;
-        startTimer();
-
-      } catch (err) {
-        alert("Microphone access denied or unsupported: " + err.message);
-      }
-    });
-
-    stopBtn.addEventListener("click", () => {
-      if (mediaRecorder && mediaRecorder.state !== "inactive") {
-        mediaRecorder.stop();
-        recordBtn.disabled = false;
-        stopBtn.disabled = true;
-      }
-    });
-
-    // --- SCREEN WAKE LOCK ---
-    async function requestWakeLock() {
-      if ("wakeLock" in navigator) {
-        try {
-          wakeLock = await navigator.wakeLock.request("screen");
-          wakeLockStatus.textContent = "Screen Lock: Active (Prevents Sleep)";
-        } catch (err) {
-          wakeLockStatus.textContent = "Screen Lock: Failed to activate";
-        }
-      }
-    }
-
-    function releaseWakeLock() {
-      if (wakeLock) {
-        wakeLock.release();
-        wakeLock = null;
-        wakeLockStatus.textContent = "Screen Lock: Inactive";
-      }
-    }
-
-    // --- TIMER ---
-    function startTimer() {
-      secondsElapsed = 0;
-      timerInterval = setInterval(() => {
-        secondsElapsed++;
-        const mins = String(Math.floor(secondsElapsed / 60)).padStart(2, '0');
-        const secs = String(secondsElapsed % 60).padStart(2, '0');
-        timerDisplay.textContent = `${mins}:${secs}`;
-      }, 1000);
-    }
-
-    function resetTimer() {
-      clearInterval(timerInterval);
-      timerDisplay.textContent = "00:00";
-    }
-
-    // --- DATABASE OPERATIONS ---
-    async function saveInterview(audioBlob) {
-      const interview = {
-        candidate: document.getElementById("candidate").value.trim(),
-        interviewer: document.getElementById("interviewer").value.trim() || "N/A",
-        notes: document.getElementById("notes").value.trim(),
-        date: new Date().toLocaleString(),
-        audio: audioBlob
-      };
-
-      const tx = db.transaction("interviews", "readwrite");
-      tx.objectStore("interviews").add(interview);
-
-      tx.oncomplete = () => {
-        // Clear form
-        document.getElementById("candidate").value = "";
-        document.getElementById("interviewer").value = "";
-        document.getElementById("notes").value = "";
-        loadInterviews();
-      };
-    }
-
-    function loadInterviews() {
-      const listContainer = document.getElementById("interviewsList");
-      listContainer.innerHTML = "";
-
-      const tx = db.transaction("interviews", "readonly");
-      const store = tx.objectStore("interviews");
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const interviews = request.result;
-        if (interviews.length === 0) {
-          listContainer.innerHTML = "<p style='color: var(--text-muted);'>No saved interviews found.</p>";
-          return;
-        }
-
-        // Display newest first
-        interviews.reverse().forEach((item) => {
-          const audioUrl = URL.createObjectURL(item.audio);
-          
-          const div = document.createElement("div");
-          div.className = "interview-item";
-          div.innerHTML = `
-            <h3>${escapeHtml(item.candidate)}</h3>
-            <div class="meta">
-              <strong>Interviewer:</strong> ${escapeHtml(item.interviewer)} | 
-              <strong>Date:</strong> ${item.date}
-            </div>
-            ${item.notes ? `<p><strong>Notes:</strong> ${escapeHtml(item.notes)}</p>` : ''}
-            <audio controls src="${audioUrl}"></audio>
-            <div style="margin-top: 8px;">
-              <button class="btn-danger" onclick="deleteInterview(${item.id})">Delete</button>
-            </div>
-          `;
-          listContainer.appendChild(div);
-        });
-      };
-    }
-
-    function deleteInterview(id) {
-      if (confirm("Are you sure you want to delete this recording?")) {
-        const tx = db.transaction("interviews", "readwrite");
-        tx.objectStore("interviews").delete(id);
-        tx.oncomplete = () => loadInterviews();
-      }
-    }
-
-    function escapeHtml(str) {
-      return str.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m]));
-    }
-  </script>
 </body>
 </html>
