@@ -195,6 +195,21 @@ function deleteInterview(id) {
 }
 
 // --- EXPORT & IMPORT DATA LOGIC ---
+
+// Synchronously convert DataURL string to Blob (prevents IndexedDB transaction timeout)
+function dataURLToBlobSync(dataURL) {
+  const parts = dataURL.split(',');
+  const mime = parts[0].match(/:(.*?);/)[1];
+  const bstr = atob(parts[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) {
+    u8arr[n] = bstr.charCodeAt(n);
+  }
+  return new Blob([u8arr], { type: mime });
+}
+
+// Asynchronously convert Blob to DataURL string for Export
 function blobToDataURL(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -204,12 +219,7 @@ function blobToDataURL(blob) {
   });
 }
 
-async function dataURLToBlob(dataURL) {
-  const res = await fetch(dataURL);
-  return await res.blob();
-}
-
-// EXPORT TO JSON
+// EXPORT ALL DATA TO JSON
 exportBtn.addEventListener("click", () => {
   const tx = db.transaction("interviews", "readonly");
   const store = tx.objectStore("interviews");
@@ -257,13 +267,13 @@ exportBtn.addEventListener("click", () => {
   };
 });
 
-// IMPORT FROM JSON
+// IMPORT DATA FROM JSON FILE
 importInput.addEventListener("change", (e) => {
   const file = e.target.files[0];
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = async (event) => {
+  reader.onload = (event) => {
     try {
       const importedItems = JSON.parse(event.target.result);
       if (!Array.isArray(importedItems)) {
@@ -271,25 +281,33 @@ importInput.addEventListener("change", (e) => {
         return;
       }
 
+      // Convert all audio streams synchronously BEFORE opening the transaction
+      const preparedItems = importedItems.map((item) => ({
+        candidate: item.candidate,
+        interviewer: item.interviewer,
+        notes: item.notes,
+        date: item.date,
+        audio: dataURLToBlobSync(item.audioDataUrl)
+      }));
+
+      // Open transaction and add items synchronously
       const tx = db.transaction("interviews", "readwrite");
       const store = tx.objectStore("interviews");
 
-      for (const item of importedItems) {
-        const audioBlob = await dataURLToBlob(item.audioDataUrl);
-        store.add({
-          candidate: item.candidate,
-          interviewer: item.interviewer,
-          notes: item.notes,
-          date: item.date,
-          audio: audioBlob
-        });
-      }
+      preparedItems.forEach((item) => {
+        store.add(item);
+      });
 
       tx.oncomplete = () => {
         alert("Data imported successfully!");
         loadInterviews();
-        importInput.value = ""; // Reset file input
+        importInput.value = ""; // Reset file selector
       };
+
+      tx.onerror = (err) => {
+        alert("Import failed: " + err.target.error);
+      };
+
     } catch (err) {
       alert("Import failed: " + err.message);
     }
@@ -299,6 +317,7 @@ importInput.addEventListener("change", (e) => {
 
 // --- HELPER FUNCTIONS ---
 function escapeHtml(str) {
+  if (!str) return '';
   return str.replace(/[&<>"']/g, (m) => ({ 
     '&': '&amp;', 
     '<': '&lt;', 
